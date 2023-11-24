@@ -28,7 +28,7 @@ inputs:
   image-readme-filepath-filter:
     description: 'Jq filter used to search for the image readme filepath'
     required: false
-    default: ".target.default.labels[\"io.boxcutter.image.readme-filepath\"]"
+    default: ".target.default.labels[\"dev.polymathrobotics.image.readme-filepath\"]"
   run-lint-stage:
     description: 'Run lint stage'
     required: false
@@ -141,7 +141,7 @@ runs:
       with:
         username: ${{ inputs.dockerhub-username }}
         password: ${{ inputs.dockerhub-password }}
-        repository: boxcutter/${{ env.image_name }}
+        repository: polymathrobotics/${{ env.image_name }}
         short-description: ${{ env.image_description }}
         readme-filepath: ${{ env.image_readme_filepath }}
         
