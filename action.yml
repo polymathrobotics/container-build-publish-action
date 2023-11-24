@@ -1,0 +1,147 @@
+name: 'Container Build and Publish'
+description: 'GitHub Action with a pipeline to build, test and publish a container image'
+inputs:
+  workdir:
+    description: "Working directory of bake execution"
+    required: false
+    default: '.'
+  test-targets:
+    description: "List of bake targets for testing"
+    required: false
+    default: 'local'
+  dockerhub-username:
+    description: 'Username used to log against the Docker registry'
+    required: false
+    default: ''
+  dockerhub-password:
+    description: 'Password or personal access token used to log against the Docker registry'
+    required: false
+    default: ''
+  image-name-filter:
+    description: 'Jq filter used to search for the image name'
+    required: false
+    default: ".target.default.labels.\"org.opencontainers.image.title\""
+  image-description-filter:
+    description: 'Jq filter used to search for the image description'
+    required: false
+    default: ".target.default.labels.\"org.opencontainers.image.description\""
+  image-readme-filepath-filter:
+    description: 'Jq filter used to search for the image readme filepath'
+    required: false
+    default: ".target.default.labels[\"io.boxcutter.image.readme-filepath\"]"
+  run-lint-stage:
+    description: 'Run lint stage'
+    required: false
+    default: true
+  run-test-stage:
+    description: 'Run test stage'
+    required: false
+    default: true
+  test-image:
+    description: 'Test image'
+    requires: false
+    default: ''
+  test-entrypoint:
+    description: 'Test entrypoint'
+    requires: false
+    default: '/bin/bash'
+    
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Check the Containerfile with hadolint
+      if: ${{ inputs.run-list-stage }}
+      shell: bash
+      working-directory: ${{ inputs.workdir }}
+      run: |
+        $(git rev-parse --show-toplevel)/bin/lint.sh
+
+    - name: Install QEMU static binaries
+      uses: docker/setup-qemu-action@v3
+      
+    - name: Set up Docker Buildx
+      id: buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build locally for testing
+      uses: docker/bake-action@v4
+      if: ${{ inputs.run-test-stage }}
+      with:
+        workdir: ${{ inputs.workdir }}
+        targets: ${{ inputs.test-targets }}
+        load: true
+
+    - name: Run tests on the image with cinc-auditor
+      if: ${{ inputs.run-test-stage }}
+      shell: bash
+      working-directory: ${{ inputs.workdir }}
+      run: |
+        test_image=${{ inputs.test-image }}
+        if [ -z "${{ inputs.test-image }}" ]; then
+          json_data="$(docker buildx bake local --print 2>/dev/null)"
+          if echo "$json_data" | jq -e '.group.local.targets' > /dev/null; then
+            test_image=$(echo "$json_data" | jq -r '.target."local-default".tags | first')
+          else
+            test_image=$(echo "$json_data" | jq -r '.target.local.tags | first')
+          fi
+        fi  
+        $(git rev-parse --show-toplevel)/bin/test.sh $test_image ${{ inputs.test-entrypoint }}
+
+    - name: Login to DockerHub
+      if: ${{ github.event_name != 'pull_request' }}
+      uses: docker/login-action@v3
+      with:
+        username: ${{ inputs.dockerhub-username }}
+        password: ${{ inputs.dockerhub-password }}
+
+    - name: Build and push
+      uses: docker/bake-action@v4
+      with:
+        workdir: ${{ inputs.workdir }}
+        push: ${{ github.event_name != 'pull_request' }}
+
+    - name: Get the image name
+      if: ${{ github.event_name != 'pull_request' }}
+      id: image_name
+      shell: bash
+      working-directory: ${{ inputs.workdir }}
+      run: |
+        json_data="$(docker buildx bake --print 2>/dev/null)"
+        echo ${{ inputs.image-name-filter }}
+        echo "image_name=$(echo "$json_data" | jq -r '${{ inputs.image-name-filter }}')" >> $GITHUB_ENV
+
+    - name: Get the image description
+      if: ${{ github.event_name != 'pull_request' }}
+      id: image_description
+      shell: bash
+      working-directory: ${{ inputs.workdir }}
+      run: |
+        json_data="$(docker buildx bake --print 2>/dev/null)"
+        echo "image_description=$(echo "$json_data" | jq -r '${{ inputs.image-description-filter }}')" >> $GITHUB_ENV
+
+    - name: Get the image readme filepath
+      if: ${{ github.event_name != 'pull_request' }}
+      id: image_readme_filepath
+      shell: bash
+      working-directory: ${{ inputs.workdir }}
+      run: |
+        json_data="$(docker buildx bake --print 2>/dev/null)"
+        if echo "$json_data" | jq -e '${{ inputs.image-readme-filepath-filter }}' > /dev/null; then
+          readme_filepath=$(echo "$json_data" | jq -r '${{ inputs.image-readme-filepath-filter }}')
+          echo "image_readme_filepath=$readme_filepath" >> $GITHUB_ENV
+        else
+          echo "image_readme_filepath=${{ inputs.workdir }}/README.md" >> $GITHUB_ENV
+        fi
+        
+    - name: Update Docker Hub Description
+      if: ${{ github.event_name != 'pull_request' }}
+      uses: peter-evans/dockerhub-description@v3
+      with:
+        username: ${{ inputs.dockerhub-username }}
+        password: ${{ inputs.dockerhub-password }}
+        repository: boxcutter/${{ env.image_name }}
+        short-description: ${{ env.image_description }}
+        readme-filepath: ${{ env.image_readme_filepath }}
+        
