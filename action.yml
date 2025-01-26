@@ -104,7 +104,7 @@ runs:
         password: ${{ inputs.dockerhub-password }}
 
     - name: Build and push
-      uses: docker/bake-action@v4
+      uses: docker/bake-action@v6
       with:
         workdir: ${{ inputs.workdir }}
         push: ${{ github.event_name != 'pull_request' }}
